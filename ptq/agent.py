@@ -24,10 +24,21 @@ DEFAULT_MESSAGE = (
 _template_cache: dict[str, str] = {}
 
 
-def _load_template(filename: str) -> str:
-    if filename not in _template_cache:
-        _template_cache[filename] = (PROMPTS_DIR / filename).read_text()
-    return _template_cache[filename]
+def _load_template(filename: str, prompt_dir: Path | None = None) -> str:
+    """Load a prompt template file.
+
+    If prompt_dir is set (from a .ptq/ repo), read from there.
+    Otherwise, read from ptq's built-in prompts/ directory.
+    """
+    if prompt_dir is not None:
+        path = prompt_dir / filename
+        cache_key = str(path)
+    else:
+        path = PROMPTS_DIR / filename
+        cache_key = filename
+    if cache_key not in _template_cache:
+        _template_cache[cache_key] = path.read_text()
+    return _template_cache[cache_key]
 
 
 def _sanitize_for_api(text: str) -> str:
@@ -42,7 +53,7 @@ def build_system_prompt(
     repo: str = "pytorch",
 ) -> str:
     profile = get_profile(repo)
-    template = _load_template(profile.prompt_template)
+    template = _load_template(profile.prompt_template, profile.prompt_dir)
     return _sanitize_for_api(
         template.format(
             job_id=job_id,
@@ -57,7 +68,7 @@ def build_adhoc_prompt(
     message: str, job_id: str, workspace: str, repo: str = "pytorch"
 ) -> str:
     profile = get_profile(repo)
-    template = _load_template(profile.adhoc_prompt_template)
+    template = _load_template(profile.adhoc_prompt_template, profile.prompt_dir)
     return _sanitize_for_api(
         template.format(
             job_id=job_id,

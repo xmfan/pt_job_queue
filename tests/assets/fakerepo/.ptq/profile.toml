@@ -1,0 +1,9 @@
+[profile]
+name = "fakerepo"
+github_repo = "org/fakerepo"
+smoke_test_import = "fakerepo"
+repro_import_hint = "import fakerepo"
+needs_cpp_build = false
+uses_custom_worktree = false
+lint_cmd = ""
+install_cmd = ""

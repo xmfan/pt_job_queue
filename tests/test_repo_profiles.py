@@ -6,6 +6,7 @@ from ptq.repo_profiles import (
     _DEFAULT_PROFILES,
     available_repos,
     get_profile,
+    load_dotptq,
     load_profiles_from_config,
     reset_cache,
 )
@@ -20,21 +21,13 @@ class TestGetProfile:
         assert p.needs_cpp_build is True
         assert p.uses_custom_worktree_tool is True
         assert p.lint_cmd == "spin fixlint"
-
-    def test_torchtitan(self):
-        p = get_profile("torchtitan")
-        assert p.name == "torchtitan"
-        assert p.github_repo == "pytorch/torchtitan"
-        assert p.dir_name == "torchtitan"
-        assert p.needs_cpp_build is False
-        assert p.uses_custom_worktree_tool is False
-        assert p.lint_cmd is None
+        assert p.prompt_dir is None
 
     def test_unknown_raises(self):
         with pytest.raises(ValueError, match="Unknown repo 'nope'"):
             get_profile("nope")
 
-    def test_all_profiles_have_prompt_templates(self):
+    def test_all_default_profiles_have_prompt_templates(self):
         for name, profile in _DEFAULT_PROFILES.items():
             assert profile.prompt_template, f"{name} missing prompt_template"
             assert profile.adhoc_prompt_template, f"{name} missing adhoc_prompt_template"
@@ -44,15 +37,17 @@ class TestGetProfile:
         with pytest.raises(AttributeError):
             p.name = "changed"
 
-    def test_available_repos(self):
+    def test_available_repos_includes_pytorch(self):
         repos = available_repos()
         assert "pytorch" in repos
-        assert "torchtitan" in repos
+
+    def test_only_pytorch_in_defaults(self):
+        """Only pytorch should be hardcoded — other repos use .ptq/ discovery."""
+        assert list(_DEFAULT_PROFILES.keys()) == ["pytorch"]
 
 
 class TestLoadFromConfig:
     def test_minimal_config(self, tmp_path):
-        # Create a minimal prompt file so validation passes
         from ptq.repo_profiles import PROMPTS_DIR
 
         prompt = PROMPTS_DIR / "investigate_myrepo.md"
@@ -123,3 +118,14 @@ class TestLoadFromConfig:
         finally:
             prompt.unlink(missing_ok=True)
             adhoc.unlink(missing_ok=True)
+
+
+class TestLoadDotptq:
+    def test_load_from_assets(self):
+        from pathlib import Path
+
+        fakerepo = Path(__file__).parent / "assets" / "fakerepo"
+        profile = load_dotptq(fakerepo)
+        assert profile.name == "fakerepo"
+        assert profile.prompt_dir is not None
+        assert profile.prompt_dir == fakerepo / ".ptq"

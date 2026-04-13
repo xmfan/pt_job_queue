@@ -1013,5 +1013,145 @@ def rebase(
             console.print(f"\n[red]Rebase failed: {result.error}[/red]")
 
 
+repo_app = typer.Typer(name="repo", help="Manage registered add-on repos.")
+app.add_typer(repo_app)
+
+
+@repo_app.command("add")
+def repo_add(
+    clone_url: Annotated[str, typer.Argument(help="Git clone URL for the repo.")],
+    machine: Annotated[
+        str | None, typer.Option(help="Remote machine where workspace lives.")
+    ] = None,
+    local: Annotated[
+        bool, typer.Option("--local", help="Use local workspace.")
+    ] = False,
+    workspace: Annotated[
+        str | None, typer.Option(help="Custom workspace path.")
+    ] = None,
+) -> None:
+    """Register a new repo by cloning it and reading its .ptq/ config.
+
+    The repo must contain a .ptq/profile.toml file.
+
+    Examples:
+        ptq repo add https://github.com/pytorch/torchtitan.git --local
+        ptq repo add git@github.com:pytorch/torchtitan.git --machine gpu-dev
+    """
+    import tempfile
+
+    import tomllib
+
+    from ptq.infrastructure.backends import create_backend
+    from ptq.repo_profiles import save_repo_registration
+
+    if not machine and not local:
+        local = True
+
+    backend = create_backend(machine=machine, local=local, workspace=workspace)
+    ws = backend.workspace
+
+    # Clone into workspace directly
+    # First, do a shallow clone to a temp location on the backend to read .ptq/
+    tmp_repo = f"{ws}/.ptq-add-tmp"
+    console.print(f"Cloning {clone_url}...")
+    backend.run(f"rm -rf {tmp_repo}", check=False)
+    result = backend.run(
+        f"git clone --depth 1 --progress {clone_url} {tmp_repo}",
+        check=False,
+        stream=True,
+    )
+    if result.returncode != 0:
+        backend.run(f"rm -rf {tmp_repo}", check=False)
+        console.print(f"[red]Failed to clone {clone_url}[/red]")
+        raise typer.Exit(1)
+
+    # Read .ptq/profile.toml from the clone (works for both local and remote)
+    profile_result = backend.run(f"cat {tmp_repo}/.ptq/profile.toml", check=False)
+    if profile_result.returncode != 0:
+        backend.run(f"rm -rf {tmp_repo}", check=False)
+        console.print(f"[red]No .ptq/profile.toml found in {clone_url}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        data = tomllib.loads(profile_result.stdout)
+        p = data.get("profile", {})
+        name = p.get("name")
+        if not name:
+            raise ValueError("Missing 'name' in .ptq/profile.toml")
+    except Exception as e:
+        backend.run(f"rm -rf {tmp_repo}", check=False)
+        console.print(f"[red]Invalid .ptq/profile.toml: {e}[/red]")
+        raise typer.Exit(1)  # noqa: B904
+
+    repo_dir = f"{ws}/{name}"
+
+    # Move into workspace (or update existing)
+    existing = backend.run(f"test -d {repo_dir}/.git", check=False)
+    if existing.returncode == 0:
+        console.print(f"{name} already exists in workspace, updating...")
+        backend.run(
+            f"cd {repo_dir} && git fetch origin && git reset --hard origin/main",
+            stream=True,
+            check=False,
+        )
+        backend.run(f"rm -rf {tmp_repo}", check=False)
+    else:
+        console.print(f"Moving {name} into workspace...")
+        backend.run(f"mv {tmp_repo} {repo_dir}")
+
+    # Cache prompt templates locally so they're available without the remote
+    local_ptq_dir = Path.home() / ".ptq" / "prompts" / name
+    local_ptq_dir.mkdir(parents=True, exist_ok=True)
+    for tmpl in ("investigate.md", "adhoc.md"):
+        tmpl_result = backend.run(f"cat {repo_dir}/.ptq/{tmpl}", check=False)
+        if tmpl_result.returncode == 0 and tmpl_result.stdout.strip():
+            (local_ptq_dir / tmpl).write_text(tmpl_result.stdout)
+
+    save_repo_registration(name, clone_url, profile_data=p)
+    github_repo = p.get("github_repo", name)
+    console.print(f"[bold green]Registered '{name}' ({github_repo})[/bold green]")
+    console.print(f"  Clone URL: {clone_url}")
+    console.print(f"  Workspace: {ws}/{name}")
+
+
+@repo_app.command("list")
+def repo_list() -> None:
+    """List all registered repos (built-in + add-ons)."""
+    from ptq.repo_profiles import available_repos, get_profile, registered_repo_urls
+
+    registry = registered_repo_urls()
+    repos = available_repos()
+    if not repos:
+        console.print("No repos configured.")
+        return
+
+    for name in repos:
+        profile = get_profile(name)
+        source = "built-in" if name not in registry else "registered"
+        dotptq = "yes" if profile.prompt_dir else "no"
+        console.print(
+            f"  [cyan]{name}[/cyan] — {profile.github_repo} "
+            f"[dim]({source}, .ptq: {dotptq})[/dim]"
+        )
+
+
+@repo_app.command("remove")
+def repo_remove(
+    name: Annotated[str, typer.Argument(help="Name of the repo to unregister.")],
+) -> None:
+    """Unregister a repo (does not delete workspace files)."""
+    from ptq.repo_profiles import remove_repo_registration
+
+    if name == "pytorch":
+        console.print("[red]Cannot remove the built-in pytorch repo.[/red]")
+        raise typer.Exit(1)
+
+    if remove_repo_registration(name):
+        console.print(f"Unregistered '{name}'.")
+    else:
+        console.print(f"[yellow]'{name}' is not registered.[/yellow]")
+
+
 if __name__ == "__main__":
     app()

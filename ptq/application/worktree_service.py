@@ -42,9 +42,9 @@ def _setup_lightweight_venv(
     *,
     verbose: bool = False,
     progress: ProgressCallback = _noop_progress,
-    repo: str = "torchtitan",
+    repo: str = "pytorch",
 ) -> None:
-    """Set up venv for lightweight (pure-Python) repos like torchtitan.
+    """Set up venv for lightweight (pure-Python) repos.
 
     Clones the base workspace venv (which has torch built), then does
     an editable install of the target repo.
@@ -91,10 +91,12 @@ def _setup_lightweight_venv(
         check=False,
     )
 
+    default_install = f"uv pip install --python {job_python} -e ."
+    install_cmd = profile.install_cmd.format(job_python=job_python) if profile.install_cmd else default_install
     progress(f"Editable install ({profile.name})...")
     with _timed("editable install", progress):
         result = backend.run(
-            f"cd {worktree_path} && uv pip install --python {job_python} -e .",
+            f"cd {worktree_path} && {install_cmd}",
             check=False,
             stream=verbose,
         )
